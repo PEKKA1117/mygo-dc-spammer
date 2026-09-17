@@ -15,6 +15,13 @@ log = logging.getLogger(__name__)
 
 VALID_STYLES = ("image", "embed", "text")
 
+# Keywords end up rendered into a single Discord embed field, which is capped
+# at 1024 characters. These bounds keep a guild from configuring itself into a
+# /mygoconfig show that always fails; the command rejects oversized input up
+# front, and normalized() enforces the same limits on anything read from disk.
+MAX_KEYWORDS = 50
+MAX_KEYWORD_CHARS = 100
+
 _TRUE_STRINGS = {"1", "true", "yes", "y", "on"}
 _FALSE_STRINGS = {"0", "false", "no", "n", "off", ""}
 
@@ -77,7 +84,12 @@ class GuildSettings:
         self.channels = _unique_ids(self.channels)
         self.ignored_channels = _unique_ids(self.ignored_channels)
         self.ignored_users = _unique_ids(self.ignored_users)
-        self.keywords = [str(k).strip().lower() for k in self.keywords if str(k).strip()]
+        keywords = [
+            str(k).strip().lower()[:MAX_KEYWORD_CHARS]
+            for k in self.keywords
+            if str(k).strip()
+        ]
+        self.keywords = keywords[:MAX_KEYWORDS]
         if self.style not in VALID_STYLES:
             self.style = "image"
         return self
@@ -234,4 +246,11 @@ class SettingsStore:
             raise
 
 
-__all__ = ["GuildSettings", "Mutator", "SettingsStore", "VALID_STYLES"]
+__all__ = [
+    "GuildSettings",
+    "MAX_KEYWORDS",
+    "MAX_KEYWORD_CHARS",
+    "Mutator",
+    "SettingsStore",
+    "VALID_STYLES",
+]

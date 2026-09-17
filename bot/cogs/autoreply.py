@@ -77,9 +77,10 @@ class AutoReply(commands.Cog):
                 )
         except EngineError as exc:
             log.error("Prediction failed for message %s: %s", message.id, exc)
+            delivered = False
             if decision.trigger is Trigger.MENTION:
-                await self._safe_send(message, content="模型現在壞掉了，等等再試 🐧")
-            else:
+                delivered = await self._safe_send(message, content="模型現在壞掉了，等等再試 🐧")
+            if not delivered:
                 self.bot.policy.release_reply(ctx.channel_id, previous)
             return
         except discord.HTTPException as exc:
@@ -97,11 +98,18 @@ class AutoReply(commands.Cog):
             self.bot.policy.release_reply(ctx.channel_id, previous)
             return
 
-        await self._safe_send(message, **build_reply(candidate, settings.style))
+        if not await self._safe_send(message, **build_reply(candidate, settings.style)):
+            self.bot.policy.release_reply(ctx.channel_id, previous)
 
-    async def _safe_send(self, message: discord.Message, **kwargs) -> None:
+    async def _safe_send(self, message: discord.Message, **kwargs) -> bool:
+        """Reply, reporting whether anything actually reached the channel.
+
+        The caller needs the answer: a swallowed Forbidden or NotFound would
+        otherwise leave the channel cooling down for a reply nobody saw.
+        """
         try:
             await message.reply(mention_author=False, **kwargs)
+            return True
         except discord.Forbidden:
             log.warning("Missing permission to reply in channel %s", message.channel.id)
         except discord.NotFound:
@@ -109,6 +117,7 @@ class AutoReply(commands.Cog):
             log.debug("Message %s vanished before the reply landed", message.id)
         except discord.HTTPException as exc:
             log.warning("Failed to reply to message %s: %s", message.id, exc)
+        return False
 
 
 async def setup(bot: commands.Bot) -> None:

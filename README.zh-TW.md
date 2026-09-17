@@ -306,7 +306,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-82 個測試，涵蓋回話判斷邏輯、設定持久化、兩個 engine，以及 discord.py 那一層
+125 個測試，涵蓋回話判斷邏輯、設定持久化、兩個 engine，以及 discord.py 那一層
 （cog 載入、權限閘門、embed 產生）。
 
 **測試不需要 torch，也不需要那份 checkpoint 就能跑** —— CI 也一樣，所以 CI 不用去拉

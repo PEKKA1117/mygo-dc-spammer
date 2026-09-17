@@ -329,6 +329,15 @@ class TypingChannel:
         return _CM()
 
 
+class ConfidentEngine(SilentEngine):
+    """Always returns a candidate that clears any confidence bar."""
+
+    async def predict(self, text, k=5):
+        return [
+            Candidate(label="x", quote="x", image_url="https://img/1.JPG", probability=99.0)
+        ]
+
+
 class TestAutoReplyReleasesCooldown:
     """The slot is claimed before inference; a silent outcome must return it."""
 
@@ -386,14 +395,6 @@ class TestAutoReplyReleasesCooldown:
     async def test_an_actual_reply_still_holds_the_channel(self, tmp_path):
         from bot.cogs.autoreply import AutoReply
 
-        class ConfidentEngine(SilentEngine):
-            async def predict(self, text, k=5):
-                return [
-                    Candidate(
-                        label="x", quote="x", image_url="https://img/1.JPG", probability=99.0
-                    )
-                ]
-
         bot = self._bot_with(tmp_path, ConfidentEngine())
         message = self._message()
 
@@ -402,3 +403,185 @@ class TestAutoReplyReleasesCooldown:
         message.reply.assert_awaited_once()
         assert bot.policy.seconds_until_ready(10, cooldown=30.0, now=time.monotonic()) > 0.0
         await bot.http.close()
+
+
+# ---------------------------------------------------------------------------
+# Second review round.
+# ---------------------------------------------------------------------------
+
+
+class TestDeliveryFailureFreesCooldown:
+    """_safe_send swallowed send errors, so a channel could be muted for a
+    reply that never reached it."""
+
+    @staticmethod
+    def _bot(tmp_path):
+        from bot.client import MyGoBot
+
+        bot = MyGoBot(make_config(tmp_path), engine=ConfidentEngine())
+        bot._connection.user = SimpleNamespace(id=999)
+        bot.settings.get(1).keywords = ["累"]
+        return bot
+
+    @staticmethod
+    def _message(reply_exc=None):
+        message = fake_message(content="今天好累喔")
+        message.channel = TypingChannel()
+        message.reply = AsyncMock(side_effect=reply_exc)
+        return message
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            discord.Forbidden(MagicMock(status=403), "no perms"),
+            discord.NotFound(MagicMock(status=404), "gone"),
+            discord.HTTPException(MagicMock(status=500), "boom"),
+        ],
+        ids=["forbidden", "not_found", "http_error"],
+    )
+    async def test_failed_delivery_frees_the_channel(self, tmp_path, exc):
+        from bot.cogs.autoreply import AutoReply
+
+        bot = self._bot(tmp_path)
+        message = self._message(reply_exc=exc)
+
+        await AutoReply(bot).on_message(message)
+
+        message.reply.assert_awaited_once()
+        assert bot.policy.seconds_until_ready(10, cooldown=30.0, now=time.monotonic()) == 0.0
+        await bot.http.close()
+
+    @pytest.mark.asyncio
+    async def test_successful_delivery_still_holds_the_channel(self, tmp_path):
+        from bot.cogs.autoreply import AutoReply
+
+        bot = self._bot(tmp_path)
+        message = self._message()
+
+        await AutoReply(bot).on_message(message)
+
+        assert bot.policy.seconds_until_ready(10, cooldown=30.0, now=time.monotonic()) > 0.0
+        await bot.http.close()
+
+    @pytest.mark.asyncio
+    async def test_safe_send_reports_delivery(self, tmp_path):
+        from bot.cogs.autoreply import AutoReply
+
+        bot = self._bot(tmp_path)
+        cog = AutoReply(bot)
+        assert await cog._safe_send(self._message(), content="x") is True
+        failing = self._message(reply_exc=discord.Forbidden(MagicMock(status=403), "no"))
+        assert await cog._safe_send(failing, content="x") is False
+        await bot.http.close()
+
+
+class TestMalformedLabelFile:
+    """Valid JSON of the wrong shape must reach the built-in fallback."""
+
+    @staticmethod
+    def _write(tmp_path, text):
+        data_dir = tmp_path / "mygochat" / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "Label_Path.json").write_text(text, encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_top_level_object_falls_back(self, tmp_path):
+        self._write(tmp_path, '{"a": 1}')
+        results = await RandomEngine(mygochat_path=tmp_path, seed=1).predict("測試")
+        assert results and all(c.image_url for c in results)
+
+    @pytest.mark.asyncio
+    async def test_rows_that_are_not_mappings_are_skipped(self, tmp_path):
+        self._write(tmp_path, '["nope", 42, {"title": "好", "Image_Path": "https://img/1.JPG"}]')
+        results = await RandomEngine(mygochat_path=tmp_path, seed=1).predict("測試")
+        assert [c.quote for c in results] == ["好"]
+
+    @pytest.mark.asyncio
+    async def test_all_rows_malformed_falls_back(self, tmp_path):
+        self._write(tmp_path, '["nope", 42, null]')
+        results = await RandomEngine(mygochat_path=tmp_path, seed=1).predict("測試")
+        assert results and all(c.image_url for c in results)
+
+
+class TestKeywordBounds:
+    """Unbounded keywords could push /mygoconfig show past Discord's limits."""
+
+    def test_normalized_caps_the_count(self):
+        from bot.settings import MAX_KEYWORDS
+
+        settings = GuildSettings(keywords=[f"k{i}" for i in range(MAX_KEYWORDS + 20)]).normalized()
+        assert len(settings.keywords) == MAX_KEYWORDS
+
+    def test_normalized_caps_each_keyword_length(self):
+        from bot.settings import MAX_KEYWORD_CHARS
+
+        settings = GuildSettings(keywords=["x" * 500]).normalized()
+        assert len(settings.keywords[0]) == MAX_KEYWORD_CHARS
+
+    def test_show_embed_field_stays_under_the_limit(self):
+        from bot.cogs.commands import EMBED_FIELD_LIMIT, _fit
+        from bot.settings import MAX_KEYWORDS, MAX_KEYWORD_CHARS
+
+        worst_case = ", ".join(f"`{'x' * MAX_KEYWORD_CHARS}`" for _ in range(MAX_KEYWORDS))
+        assert len(worst_case) > EMBED_FIELD_LIMIT  # the bounds alone are not enough
+        assert len(_fit(worst_case, EMBED_FIELD_LIMIT)) <= EMBED_FIELD_LIMIT
+
+    def test_fit_leaves_short_values_untouched(self):
+        from bot.cogs.commands import _fit
+
+        assert _fit("短", 1024) == "短"
+
+    @pytest.mark.asyncio
+    async def test_show_renders_within_limits_at_the_cap(self, loaded_bot):
+        from bot.cogs.commands import EMBED_FIELD_LIMIT
+        from bot.settings import MAX_KEYWORDS, MAX_KEYWORD_CHARS
+
+        loaded_bot.settings.get(99).keywords = [
+            "x" * MAX_KEYWORD_CHARS for _ in range(MAX_KEYWORDS)
+        ]
+        cog = loaded_bot.get_cog("mygoconfig")
+        interaction = fake_interaction(manage_guild=True)
+        await cog.show.callback(cog, interaction)
+
+        embed = interaction.response.send_message.call_args.kwargs["embed"]
+        assert all(len(field.value) <= EMBED_FIELD_LIMIT for field in embed.fields)
+
+    @pytest.mark.asyncio
+    async def test_overlong_keyword_is_rejected(self, loaded_bot):
+        from bot.settings import MAX_KEYWORD_CHARS
+
+        cog = loaded_bot.get_cog("mygoconfig")
+        interaction = fake_interaction(manage_guild=True)
+        action = discord.app_commands.Choice(name="add", value="add")
+        await cog.keyword.callback(cog, interaction, action, word="x" * (MAX_KEYWORD_CHARS + 1))
+
+        assert "太長" in interaction.response.send_message.call_args.args[0]
+        assert loaded_bot.settings.get(99).keywords == []
+
+
+class TestEmbedMentionsCannotPing:
+    """The review claimed /mygo candidates input could ping via the embed.
+
+    Two independent reasons it cannot, pinned here so a future change to
+    either one is caught.
+    """
+
+    def test_client_suppresses_all_mention_parsing(self, tmp_path):
+        from bot.client import MyGoBot
+
+        bot = MyGoBot(make_config(tmp_path), engine=RandomEngine(seed=1))
+        # This is what discord.py sends as the message-level allowed_mentions.
+        assert bot.allowed_mentions.to_dict() == {"parse": []}
+
+    def test_query_text_is_confined_to_the_embed_description(self):
+        from bot.render import build_candidates_embed
+
+        candidate = Candidate(
+            label="不可能吧", quote="不可能吧", image_url="https://img/1.JPG", probability=87.5
+        )
+        embed = build_candidates_embed([candidate], "@everyone 快看")
+        # Embed content never produces a notification, and nothing echoes the
+        # query into the message content where allowed_mentions would matter.
+        assert "@everyone" in embed.description
+        assert embed.to_dict()["type"] == "rich"

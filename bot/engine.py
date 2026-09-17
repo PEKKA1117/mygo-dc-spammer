@@ -177,14 +177,19 @@ class RandomEngine:
             label_file = self._path / "mygochat" / "data" / "Label_Path.json"
             try:
                 data = json.loads(label_file.read_text(encoding="utf-8"))
+                # Valid JSON of the wrong shape (a top-level object, or rows
+                # that are not mappings) would otherwise raise AttributeError
+                # past the handler below and defeat the advertised fallback.
+                if not isinstance(data, list):
+                    raise TypeError(f"expected a list of rows, got {type(data).__name__}")
                 pairs = [
                     (str(row["title"]), str(row["Image_Path"]))
                     for row in data
-                    if row.get("title") and row.get("Image_Path")
+                    if isinstance(row, dict) and row.get("title") and row.get("Image_Path")
                 ]
                 if pairs:
                     return pairs
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
                 log.warning("Falling back to built-in quotes (%s): %s", label_file, exc)
         return list(_BUILTIN_FALLBACK)
 

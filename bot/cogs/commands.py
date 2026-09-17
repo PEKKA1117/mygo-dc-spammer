@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from ..engine import EngineError
 from ..render import build_candidates_embed, build_reply
-from ..settings import VALID_STYLES
+from ..settings import MAX_KEYWORD_CHARS, MAX_KEYWORDS, VALID_STYLES
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +82,19 @@ class MyGo(commands.GroupCog, name="mygo"):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+# Discord's hard limits. Exceeding either turns a settings dump into an error.
+EMBED_FIELD_LIMIT = 1024
+MESSAGE_LIMIT = 2000
+
+
+def _fit(value: str, limit: int) -> str:
+    """Trim to a Discord limit, saying so rather than silently dropping data."""
+    if len(value) <= limit:
+        return value
+    ellipsis = " …"
+    return value[: limit - len(ellipsis)] + ellipsis
+
+
 def _mention_list(ids: list[int], kind: str) -> str:
     if not ids:
         return "*(none)*"
@@ -125,7 +138,9 @@ class MyGoConfig(commands.GroupCog, name="mygoconfig"):
         assert interaction.guild_id is not None
         settings = await self.bot.settings.mutate(interaction.guild_id, mutator)
         summary = ", ".join(f"`{k}` → `{getattr(settings, k)}`" for k in changed_keys)
-        await interaction.response.send_message(f"已更新：{summary}", ephemeral=True)
+        # A long keyword list can push this past Discord's message limit.
+        body = _fit(f"已更新：{summary}", MESSAGE_LIMIT)
+        await interaction.response.send_message(body, ephemeral=True)
 
     @app_commands.command(name="show", description="顯示本伺服器的完整設定")
     async def show(self, interaction: discord.Interaction) -> None:
@@ -137,22 +152,28 @@ class MyGoConfig(commands.GroupCog, name="mygoconfig"):
         embed.add_field(name="cooldown_seconds", value=str(settings.cooldown_seconds), inline=True)
         embed.add_field(name="min_confidence", value=f"{settings.min_confidence:g}%", inline=True)
         embed.add_field(name="style", value=settings.style, inline=True)
+        allowlist = (
+            _mention_list(settings.channels, "channel") if settings.channels else "*(all)*"
+        )
         embed.add_field(
             name="channels (allowlist)",
-            value=_mention_list(settings.channels, "channel") if settings.channels else "*(all)*",
+            value=_fit(allowlist, EMBED_FIELD_LIMIT),
             inline=False,
         )
         embed.add_field(
             name="ignored channels",
-            value=_mention_list(settings.ignored_channels, "channel"),
+            value=_fit(_mention_list(settings.ignored_channels, "channel"), EMBED_FIELD_LIMIT),
             inline=False,
         )
         embed.add_field(
-            name="ignored users", value=_mention_list(settings.ignored_users, "user"), inline=False
+            name="ignored users",
+            value=_fit(_mention_list(settings.ignored_users, "user"), EMBED_FIELD_LIMIT),
+            inline=False,
         )
+        keywords = ", ".join(f"`{k}`" for k in settings.keywords) or "*(none)*"
         embed.add_field(
             name="keywords",
-            value=", ".join(f"`{k}`" for k in settings.keywords) or "*(none)*",
+            value=_fit(keywords, EMBED_FIELD_LIMIT),
             inline=False,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -297,6 +318,19 @@ class MyGoConfig(commands.GroupCog, name="mygoconfig"):
 
         normalized = word.strip().lower()
         adding = action.value == "add"
+
+        if adding and len(normalized) > MAX_KEYWORD_CHARS:
+            await interaction.response.send_message(
+                f"關鍵字太長了（上限 {MAX_KEYWORD_CHARS} 個字元）。", ephemeral=True
+            )
+            return
+
+        settings = self.bot.settings.get(interaction.guild_id)
+        if adding and normalized not in settings.keywords and len(settings.keywords) >= MAX_KEYWORDS:
+            await interaction.response.send_message(
+                f"關鍵字數量已達上限（{MAX_KEYWORDS} 個），請先移除一些。", ephemeral=True
+            )
+            return
 
         def mutator(settings):
             keywords = list(settings.keywords)
