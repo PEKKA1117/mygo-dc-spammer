@@ -1,5 +1,7 @@
 # mygo-dc-spammer
 
+**English** · [繁體中文](README.zh-TW.md)
+
 A Discord bot that reads what people are saying and answers with the MyGO!!!!!
 screenshot that fits, using [MyGOChat](https://github.com/qaz45647/MyGOChat) —
 a RoBERTa classifier that maps a line of Traditional Chinese onto one of 157
@@ -33,7 +35,7 @@ becoming noise.
 ### 2. Install
 
 ```bash
-git clone https://github.com/pekka1117/mygo-dc-spammer.git
+git clone https://github.com/PEKKA1117/mygo-dc-spammer.git
 cd mygo-dc-spammer
 python3 -m venv .venv && source .venv/bin/activate
 
@@ -139,6 +141,7 @@ bot/
     autoreply.py  the on_message listener
     commands.py   /mygo and /mygoconfig
 docs/MYGOCHAT.md  upstream model notes and the traps it sets
+README.zh-TW.md   Traditional Chinese README
 scripts/setup.sh  dependency install + LFS-aware model fetch
 ```
 
