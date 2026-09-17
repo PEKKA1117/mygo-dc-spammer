@@ -66,8 +66,9 @@ class AutoReply(commands.Cog):
             return
 
         # Claim the cooldown slot before the slow part, so a burst of messages
-        # arriving together cannot each pass the check and all reply.
-        self.bot.policy.record_reply(ctx.channel_id, now)
+        # arriving together cannot each pass the check and all reply. Every path
+        # that ends without speaking hands the slot back.
+        previous = self.bot.policy.record_reply(ctx.channel_id, now)
 
         try:
             async with message.channel.typing():
@@ -78,9 +79,12 @@ class AutoReply(commands.Cog):
             log.error("Prediction failed for message %s: %s", message.id, exc)
             if decision.trigger is Trigger.MENTION:
                 await self._safe_send(message, content="模型現在壞掉了，等等再試 🐧")
+            else:
+                self.bot.policy.release_reply(ctx.channel_id, previous)
             return
         except discord.HTTPException as exc:
             log.warning("Could not open typing indicator in %s: %s", ctx.channel_id, exc)
+            self.bot.policy.release_reply(ctx.channel_id, previous)
             return
 
         candidate = pick_candidate(candidates, decision.trigger, settings)
@@ -90,6 +94,7 @@ class AutoReply(commands.Cog):
                 settings.min_confidence,
                 message.id,
             )
+            self.bot.policy.release_reply(ctx.channel_id, previous)
             return
 
         await self._safe_send(message, **build_reply(candidate, settings.style))

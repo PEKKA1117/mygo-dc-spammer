@@ -91,8 +91,24 @@ class ReplyPolicy:
         self._rng = rng or random.Random()
         self._last_reply: dict[int, float] = {}
 
-    def record_reply(self, channel_id: int, now: float) -> None:
+    def record_reply(self, channel_id: int, now: float) -> float | None:
+        """Claim the channel's cooldown slot, returning the value it replaced."""
+        previous = self._last_reply.get(channel_id)
         self._last_reply[channel_id] = now
+        return previous
+
+    def release_reply(self, channel_id: int, previous: float | None) -> None:
+        """Undo a claim the bot never cashed in.
+
+        The slot is claimed before inference so a burst of messages cannot all
+        pass the check at once, but if the model errors out or nothing clears
+        the confidence bar the channel should not sit muted for a reply that
+        never happened.
+        """
+        if previous is None:
+            self._last_reply.pop(channel_id, None)
+        else:
+            self._last_reply[channel_id] = previous
 
     def seconds_until_ready(self, channel_id: int, cooldown: float, now: float) -> float:
         last = self._last_reply.get(channel_id)
@@ -143,7 +159,13 @@ class ReplyPolicy:
         if any(keyword in lowered for keyword in settings.keywords):
             return Trigger.KEYWORD
 
-        if settings.reply_chance > 0 and self._rng.uniform(0.0, 100.0) < settings.reply_chance:
+        if settings.reply_chance <= 0:
+            return None
+        # uniform() can return its upper endpoint, so a configured 100% would
+        # very occasionally fail `< 100`. 100 is an exposed setting; honour it.
+        if settings.reply_chance >= 100.0:
+            return Trigger.CHANCE
+        if self._rng.uniform(0.0, 100.0) < settings.reply_chance:
             return Trigger.CHANCE
 
         return None

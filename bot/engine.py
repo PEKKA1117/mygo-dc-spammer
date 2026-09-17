@@ -107,7 +107,9 @@ class MyGOChatEngine:
         except ImportError as exc:  # pragma: no cover - depends on local install
             raise EngineError(
                 f"Could not import mygochat from {self._path}: {exc}. "
-                "Check that the clone is complete and `pip install -r requirements.txt` ran."
+                "The model needs torch and transformers: "
+                "`pip install -r requirements-model.txt`. "
+                "Set MYGO_ENGINE=random to run without them."
             ) from exc
 
         try:

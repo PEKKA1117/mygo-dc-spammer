@@ -22,9 +22,6 @@ if [[ "$SKIP_MODEL" == "1" ]]; then
   exit 0
 fi
 
-info "Installing model dependencies (this pulls torch; it is large)"
-"$PYTHON" -m pip install -r "$REPO_ROOT/requirements-model.txt"
-
 # The 1.3 GB model.safetensors is a git-lfs object. Without git-lfs the clone
 # "succeeds" but leaves a ~130-byte pointer file, and transformers fails later
 # with a confusing deserialization error.
@@ -35,6 +32,9 @@ if ! command -v git-lfs >/dev/null 2>&1; then
   Then re-run this script."
 fi
 git lfs install --skip-repo
+
+info "Installing model dependencies (this pulls torch; it is large)"
+"$PYTHON" -m pip install -r "$REPO_ROOT/requirements-model.txt"
 
 if [[ -d "$VENDOR_DIR/.git" ]]; then
   info "Updating existing checkout at $VENDOR_DIR"

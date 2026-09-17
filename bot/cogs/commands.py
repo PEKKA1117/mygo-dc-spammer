@@ -42,7 +42,11 @@ class MyGo(commands.GroupCog, name="mygo"):
             return
 
         settings = self.bot.settings.get(interaction.guild_id)
-        await interaction.followup.send(**build_reply(candidates[0], settings.style))
+        # defer(ephemeral=...) only covers the placeholder; a followup is a new
+        # message and is public unless it says otherwise.
+        await interaction.followup.send(
+            **build_reply(candidates[0], settings.style), ephemeral=private
+        )
 
     @app_commands.command(name="candidates", description="列出模型的前幾名候選答案")
     @app_commands.describe(text="要餵給模型的文字", count="要列出幾個（1-10）")
@@ -94,10 +98,33 @@ class MyGoConfig(commands.GroupCog, name="mygoconfig"):
         self.bot = bot
         super().__init__()
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Enforce Manage Server at runtime.
+
+        `default_permissions` only seeds the default: a server admin can hand
+        these commands to any role from Server Settings -> Integrations, so it
+        is a UI hint rather than a guarantee. Bot owners listed in OWNER_IDS
+        bypass the check so they can fix a guild that locked itself out.
+        """
+        if interaction.guild is None:
+            raise app_commands.NoPrivateMessage()
+        if interaction.user.id in self.bot.config.owner_ids:
+            return True
+        permissions = getattr(interaction.user, "guild_permissions", None)
+        if permissions is not None and permissions.manage_guild:
+            return True
+        raise app_commands.MissingPermissions(["manage_guild"])
+
     async def _apply(self, interaction: discord.Interaction, **changes) -> None:
+        await self._apply_mutation(interaction, lambda _settings: changes, changes.keys())
+
+    async def _apply_mutation(
+        self, interaction: discord.Interaction, mutator, changed_keys
+    ) -> None:
+        """Run the edit inside the store lock, then report what landed."""
         assert interaction.guild_id is not None
-        settings = await self.bot.settings.update(interaction.guild_id, **changes)
-        summary = ", ".join(f"`{k}` → `{getattr(settings, k)}`" for k in changes)
+        settings = await self.bot.settings.mutate(interaction.guild_id, mutator)
+        summary = ", ".join(f"`{k}` → `{getattr(settings, k)}`" for k in changed_keys)
         await interaction.response.send_message(f"已更新：{summary}", ephemeral=True)
 
     @app_commands.command(name="show", description="顯示本伺服器的完整設定")
@@ -181,8 +208,6 @@ class MyGoConfig(commands.GroupCog, name="mygoconfig"):
         action: app_commands.Choice[str],
         channel: discord.TextChannel | None = None,
     ) -> None:
-        settings = self.bot.settings.get(interaction.guild_id)
-
         if action.value == "clear":
             await self._apply(interaction, channels=[], ignored_channels=[])
             return
@@ -193,23 +218,31 @@ class MyGoConfig(commands.GroupCog, name="mygoconfig"):
             )
             return
 
-        allowed = list(settings.channels)
-        ignored = list(settings.ignored_channels)
+        target = channel.id
+        verb = action.value
 
-        if action.value == "allow":
-            if channel.id not in allowed:
-                allowed.append(channel.id)
-            ignored = [c for c in ignored if c != channel.id]
-        elif action.value == "unallow":
-            allowed = [c for c in allowed if c != channel.id]
-        elif action.value == "ignore":
-            if channel.id not in ignored:
-                ignored.append(channel.id)
-            allowed = [c for c in allowed if c != channel.id]
-        else:  # unignore
-            ignored = [c for c in ignored if c != channel.id]
+        def mutator(settings):
+            allowed = list(settings.channels)
+            ignored = list(settings.ignored_channels)
 
-        await self._apply(interaction, channels=allowed, ignored_channels=ignored)
+            if verb == "allow":
+                if target not in allowed:
+                    allowed.append(target)
+                ignored = [c for c in ignored if c != target]
+            elif verb == "unallow":
+                allowed = [c for c in allowed if c != target]
+            elif verb == "ignore":
+                if target not in ignored:
+                    ignored.append(target)
+                allowed = [c for c in allowed if c != target]
+            else:  # unignore
+                ignored = [c for c in ignored if c != target]
+
+            return {"channels": allowed, "ignored_channels": ignored}
+
+        await self._apply_mutation(
+            interaction, mutator, ("channels", "ignored_channels")
+        )
 
     @app_commands.command(name="ignoreuser", description="忽略或恢復某位使用者")
     @app_commands.choices(
@@ -224,14 +257,19 @@ class MyGoConfig(commands.GroupCog, name="mygoconfig"):
         action: app_commands.Choice[str],
         user: discord.User,
     ) -> None:
-        settings = self.bot.settings.get(interaction.guild_id)
-        ignored = list(settings.ignored_users)
-        if action.value == "add":
-            if user.id not in ignored:
-                ignored.append(user.id)
-        else:
-            ignored = [u for u in ignored if u != user.id]
-        await self._apply(interaction, ignored_users=ignored)
+        target = user.id
+        adding = action.value == "add"
+
+        def mutator(settings):
+            ignored = list(settings.ignored_users)
+            if adding:
+                if target not in ignored:
+                    ignored.append(target)
+            else:
+                ignored = [u for u in ignored if u != target]
+            return {"ignored_users": ignored}
+
+        await self._apply_mutation(interaction, mutator, ("ignored_users",))
 
     @app_commands.command(name="keyword", description="管理一定會觸發回覆的關鍵字")
     @app_commands.choices(
@@ -247,8 +285,6 @@ class MyGoConfig(commands.GroupCog, name="mygoconfig"):
         action: app_commands.Choice[str],
         word: str | None = None,
     ) -> None:
-        settings = self.bot.settings.get(interaction.guild_id)
-
         if action.value == "clear":
             await self._apply(interaction, keywords=[])
             return
@@ -260,14 +296,18 @@ class MyGoConfig(commands.GroupCog, name="mygoconfig"):
             return
 
         normalized = word.strip().lower()
-        keywords = list(settings.keywords)
-        if action.value == "add":
-            if normalized not in keywords:
-                keywords.append(normalized)
-        else:
-            keywords = [k for k in keywords if k != normalized]
+        adding = action.value == "add"
 
-        await self._apply(interaction, keywords=keywords)
+        def mutator(settings):
+            keywords = list(settings.keywords)
+            if adding:
+                if normalized not in keywords:
+                    keywords.append(normalized)
+            else:
+                keywords = [k for k in keywords if k != normalized]
+            return {"keywords": keywords}
+
+        await self._apply_mutation(interaction, mutator, ("keywords",))
 
 
 async def setup(bot: commands.Bot) -> None:

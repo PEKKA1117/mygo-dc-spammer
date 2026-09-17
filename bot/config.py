@@ -34,6 +34,18 @@ def _env_float(name: str, default: float) -> float:
         raise ValueError(f"{name} must be a number, got {raw!r}") from exc
 
 
+def _env_positive_int(name: str, default: int, maximum: int) -> int:
+    """An int that must land in 1..maximum.
+
+    A CANDIDATE_COUNT of 0 would make every prediction come back empty and the
+    bot would go quiet with nothing in the log to explain it.
+    """
+    value = _env_int(name, default)
+    if not 1 <= value <= maximum:
+        raise ValueError(f"{name} must be between 1 and {maximum}, got {value}")
+    return value
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
@@ -88,8 +100,8 @@ class Config:
             engine=engine,
             mygochat_path=Path(_env_str("MYGOCHAT_PATH", str(REPO_ROOT / "vendor" / "MyGOChat"))),
             settings_path=Path(_env_str("SETTINGS_PATH", str(REPO_ROOT / "data" / "guilds.json"))),
-            max_input_chars=_env_int("MAX_INPUT_CHARS", 300),
-            candidate_count=_env_int("CANDIDATE_COUNT", 5),
+            max_input_chars=_env_positive_int("MAX_INPUT_CHARS", 300, 2000),
+            candidate_count=_env_positive_int("CANDIDATE_COUNT", 5, 25),
             owner_ids=_env_id_set("OWNER_IDS"),
             dev_guild_id=dev_guild or None,
             log_level=_env_str("LOG_LEVEL", "INFO").upper(),

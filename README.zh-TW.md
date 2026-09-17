@@ -241,7 +241,10 @@ bot：[你知道這對她造成多大的傷害嗎.PNG]
 | `/mygoconfig ignoreuser <action> <user>` | 對特定使用者靜音 |
 | `/mygoconfig keyword <action> [word]` | 管理必定觸發的關鍵字 |
 
-`/mygoconfig` 是靠 Discord 本身的權限系統擋的，一般成員在指令選單裡根本看不到它。
+`/mygoconfig` 一般成員在指令選單裡看不到（靠 `default_permissions`），而且執行時還會
+再檢查一次權限 —— 因為 `default_permissions` 只是「預設值」，伺服器管理員可以在
+**伺服器設定 → 整合** 把這組指令改分配給任何身分組。列在 `OWNER_IDS` 裡的使用者會跳過
+這個檢查，用來救那種「管理員把自己權限拿掉」的伺服器。
 
 `channel` 的 action 有：`allow`、`unallow`、`ignore`、`unignore`、`clear`。
 `keyword` 的 action 有：`add`、`remove`、`clear`。
@@ -260,7 +263,7 @@ bot：[你知道這對她造成多大的傷害嗎.PNG]
 | `SETTINGS_PATH` | `./data/guilds.json` | 各伺服器設定存放位置 |
 | `MAX_INPUT_CHARS` | `300` | 餵給分類器的最長字數 |
 | `CANDIDATE_COUNT` | `5` | 每次推論要幾個候選 |
-| `OWNER_IDS` | *(空)* | 視為擁有者的使用者 ID，逗號分隔 |
+| `OWNER_IDS` | *(空)* | 逗號分隔的使用者 ID；這些人在任何伺服器都能用 `/mygoconfig`，不需要管理伺服器權限 |
 | `DEV_GUILD_ID` | *(空)* | 設了就只同步斜線指令到這個伺服器（立即生效） |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 

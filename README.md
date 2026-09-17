@@ -93,8 +93,11 @@ mounted so per-guild settings survive rebuilds.
 | `/mygoconfig ignoreuser <action> <user>` | Manage Server | Mute the bot for one person |
 | `/mygoconfig keyword <action> [word]` | Manage Server | Words that always trigger a reply |
 
-`/mygoconfig` is gated on the **Manage Server** permission by Discord itself, so
-it never shows up for regular members.
+`/mygoconfig` is hidden from regular members by Discord's `default_permissions`,
+and checked again at runtime: `default_permissions` is only the *default*, and a
+server admin can reassign the command to any role from Server Settings →
+Integrations. Users listed in `OWNER_IDS` bypass the check, which is how you
+unlock a guild whose admins removed their own access.
 
 ## How it decides to reply
 
@@ -121,7 +124,7 @@ speaks when spoken to. Turn on ambient replies with
 
 Environment (see `.env.example`): `DISCORD_TOKEN`, `MYGO_ENGINE`,
 `MYGOCHAT_PATH`, `SETTINGS_PATH`, `MAX_INPUT_CHARS`, `CANDIDATE_COUNT`,
-`OWNER_IDS`, `DEV_GUILD_ID`, `LOG_LEVEL`.
+`OWNER_IDS` (may run `/mygoconfig` anywhere), `DEV_GUILD_ID`, `LOG_LEVEL`.
 
 Per-guild settings live in `data/guilds.json`, written atomically
 (temp file + rename) so a crash mid-write cannot corrupt them.

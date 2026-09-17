@@ -9,15 +9,40 @@ import os
 import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 log = logging.getLogger(__name__)
 
 VALID_STYLES = ("image", "embed", "text")
 
+_TRUE_STRINGS = {"1", "true", "yes", "y", "on"}
+_FALSE_STRINGS = {"0", "false", "no", "n", "off", ""}
+
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def _coerce_bool(value: Any) -> bool:
+    """Turn a persisted value into a real bool.
+
+    Dataclass annotations are not enforced at runtime, so a hand-edited
+    `{"enabled": "false"}` would otherwise stay truthy and keep auto-reply on --
+    the exact opposite of what the file says. Anything unrecognizable raises so
+    `from_dict` falls back to the defaults instead of guessing.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE_STRINGS:
+            return True
+        if lowered in _FALSE_STRINGS:
+            return False
+        raise ValueError(f"not a boolean: {value!r}")
+    if isinstance(value, int):
+        return bool(value)
+    raise ValueError(f"not a boolean: {value!r}")
 
 
 @dataclass
@@ -44,6 +69,8 @@ class GuildSettings:
 
     def normalized(self) -> "GuildSettings":
         """Coerce out-of-range values that reached us from disk or a command."""
+        self.enabled = _coerce_bool(self.enabled)
+        self.reply_to_mentions = _coerce_bool(self.reply_to_mentions)
         self.reply_chance = _clamp(float(self.reply_chance), 0.0, 100.0)
         self.min_confidence = _clamp(float(self.min_confidence), 0.0, 100.0)
         self.cooldown_seconds = int(max(0, self.cooldown_seconds))
@@ -81,6 +108,11 @@ def _unique_ids(values: Iterable[Any]) -> list[int]:
     return seen
 
 
+# A mutator reads the live settings and returns the field changes to apply.
+# It runs inside the store lock, so read-modify-write stays atomic.
+Mutator = Callable[[GuildSettings], dict[str, Any]]
+
+
 class SettingsStore:
     """Async-safe in-memory cache backed by a single JSON file."""
 
@@ -105,7 +137,17 @@ class SettingsStore:
             log.error("Could not read %s (%s); starting with defaults", self._path, exc)
             return
 
-        guilds = payload.get("guilds", payload) if isinstance(payload, dict) else {}
+        guilds = payload.get("guilds", payload) if isinstance(payload, dict) else payload
+        if not isinstance(guilds, dict):
+            # Valid JSON of the wrong shape, e.g. {"guilds": []}. Without this
+            # guard the .items() below raises and takes startup down with it.
+            log.error(
+                "%s does not contain a guild mapping (found %s); starting with defaults",
+                self._path,
+                type(guilds).__name__,
+            )
+            return
+
         for raw_id, raw_settings in guilds.items():
             try:
                 guild_id = int(raw_id)
@@ -130,26 +172,47 @@ class SettingsStore:
 
     async def update(self, guild_id: int, **changes: Any) -> GuildSettings:
         """Apply field changes and flush to disk."""
+        return await self.mutate(guild_id, lambda _settings: changes)
+
+    async def mutate(self, guild_id: int, mutator: Mutator) -> GuildSettings:
+        """Read-modify-write under the lock, then flush to disk.
+
+        Commands that edit a list (channels, keywords, ignored users) must read
+        the current value inside the lock: reading it beforehand lets two
+        concurrent admin commands compute from the same base and silently drop
+        one of the two edits.
+        """
         async with self._lock:
             settings = self.get(guild_id)
+            changes = mutator(settings)
             unknown = set(changes) - {f.name for f in fields(GuildSettings)}
             if unknown:
                 raise KeyError(f"Unknown setting(s): {', '.join(sorted(unknown))}")
             for key, value in changes.items():
                 setattr(settings, key, value)
             settings.normalized()
-            await asyncio.to_thread(self._write)
+            await self._flush_locked()
             return settings
 
     async def save(self) -> None:
         async with self._lock:
-            await asyncio.to_thread(self._write)
+            await self._flush_locked()
 
-    def _write(self) -> None:
-        payload = {
+    async def _flush_locked(self) -> None:
+        # Build the payload here, in the event loop, before handing it to a
+        # worker thread: `get()` is not lock-protected and inserts new guilds,
+        # so serializing inside the thread can hit "dict changed size during
+        # iteration" or write a torn snapshot.
+        payload = self._snapshot()
+        await asyncio.to_thread(self._write, payload)
+
+    def _snapshot(self) -> dict[str, Any]:
+        return {
             "version": 1,
             "guilds": {str(gid): s.to_dict() for gid, s in self._guilds.items()},
         }
+
+    def _write(self, payload: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # Write-then-rename so a crash mid-write cannot truncate the real file.
         handle = tempfile.NamedTemporaryFile(
@@ -171,4 +234,4 @@ class SettingsStore:
             raise
 
 
-__all__ = ["GuildSettings", "SettingsStore", "VALID_STYLES"]
+__all__ = ["GuildSettings", "Mutator", "SettingsStore", "VALID_STYLES"]

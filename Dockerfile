@@ -23,11 +23,16 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY requirements.txt requirements-model.txt ./
-# The CPU-only torch wheel is a fraction of the size of the default CUDA build.
-# Drop --index-url below if you are deploying to a GPU host.
+# torch comes from the CPU-only index (a fraction of the default CUDA build's
+# size); everything else comes from PyPI. These must be two steps: --index-url
+# REPLACES PyPI rather than adding to it, and transformers is not published on
+# download.pytorch.org, so a single combined install cannot resolve it.
+# Installing torch first also means the second command sees torch>=2.1 already
+# satisfied and leaves the CPU wheel in place.
+# For a GPU host, drop the first pip install and let the second pull CUDA torch.
 RUN pip install --no-cache-dir -r requirements.txt \
- && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
-       -r requirements-model.txt
+ && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
+ && pip install --no-cache-dir -r requirements-model.txt
 
 COPY --from=model /vendor /app/vendor
 COPY bot/ ./bot/
