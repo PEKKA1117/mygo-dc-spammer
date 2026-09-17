@@ -70,8 +70,12 @@ docker compose up -d --build
 ```
 
 The build clones the model in a separate stage and installs the CPU-only torch
-wheel, so the image stays far smaller than a default CUDA install. `./data` is
-mounted so per-guild settings survive rebuilds.
+wheel, so the image stays far smaller than a default CUDA install. Per-guild
+settings live in a named volume (`mygo-data`) so they survive rebuilds. It is a
+named volume rather than a `./data` bind mount deliberately: the container runs
+as an unprivileged uid, and a bind mount would shadow the image's directory with
+one owned by the host user, leaving the bot unable to write `guilds.json`. See
+the comment in `docker-compose.yml` if you want the file on the host instead.
 
 ---
 

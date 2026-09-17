@@ -152,7 +152,13 @@ docker compose up -d --build
 ```
 
 build 分成兩個階段，模型在獨立的 stage 下載，而且裝的是 CPU-only 的 torch wheel，
-所以 image 比預設的 CUDA 版小非常多。`./data` 有掛出來，各伺服器的設定不會因為重 build 而消失。
+所以 image 比預設的 CUDA 版小非常多。各伺服器的設定存在名為 `mygo-data` 的 named volume，
+重 build 不會消失。
+
+這裡刻意用 named volume 而不是 `./data` bind mount：容器是以非特權的 uid 10001 執行，
+而 bind mount 會用宿主機的目錄（通常屬於你自己的帳號）遮蔽掉 image 裡已經設好擁有者的
+`/app/data`，結果就是 bot 根本寫不出 `guilds.json`，所有設定變更都會遺失。如果你想把檔案
+留在宿主機上方便查看，`docker-compose.yml` 裡的註解寫了要怎麼做。
 
 ---
 
