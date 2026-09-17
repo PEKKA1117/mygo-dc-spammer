@@ -1,0 +1,13 @@
+services:
+  mygo-bot:
+    build: .
+    image: mygo-dc-spammer
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Paths inside the container; leave these alone.
+      MYGOCHAT_PATH: /app/vendor/MyGOChat
+      SETTINGS_PATH: /app/data/guilds.json
+    volumes:
+      # Per-guild settings survive image rebuilds.
+      - ./data:/app/data

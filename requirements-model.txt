@@ -1,0 +1,7 @@
+# Needed only for MYGO_ENGINE=mygochat (the default).
+#
+# MyGOChat pins torch==2.1.0 / transformers==4.30.0, which have no wheels for
+# Python 3.11+. These looser pins load the same checkpoint fine; see
+# docs/MYGOCHAT.md if you hit a mismatch and need the original environment.
+torch>=2.1
+transformers>=4.30
