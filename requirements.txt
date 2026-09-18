@@ -1,0 +1,4 @@
+# Bot runtime only. The model itself lives in requirements-model.txt so that
+# MYGO_ENGINE=random (and CI) do not have to pull ~2 GB of torch wheels.
+discord.py>=2.3,<3
+python-dotenv>=1.0
